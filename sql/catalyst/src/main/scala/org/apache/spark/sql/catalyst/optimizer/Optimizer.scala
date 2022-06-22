@@ -79,18 +79,51 @@ abstract class Optimizer(catalogManager: CatalogManager)
     val operatorOptimizationRuleSet =
       Seq(
         // Operator push down
+        // https://blog.csdn.net/zg_hover/article/details/118633266
+        // 将select的project列下推到relation上,
+        // ds2.union(ds3).union(ds2).select("name").explain(true)
+        // project下推，将name下推到3个relation上
+        // union distinct 不能这样优化
         PushProjectionThroughUnion,
+        // 注释中提到，将调整joinorder使得最开始执行的join至少有一个condition
+        // https://issues.apache.org/jira/browse/SPARK-12032
+        // where条件可以推到join里面，将outer join转换为inner join
+        // 并且where条件顺序会影响join的顺序。
+        // https://issues.apache.org/jira/browse/SPARK-17791
+        // 星形join优化，将dim表提前到fact表做join优化
         ReorderJoin,
+        // 将outer join转换为innerjoin如果有相关条件的话
+        // 如果可以推导出join条件列非空，则可以将outerjoin 调整未inner join
         EliminateOuterJoin,
+        // 谓词下推支持join、project、filter、aggregate
+        // 此处包含join下推和非join下推
+        // join下推https://hover.blog.csdn.net/article/details/118884263
+        // 参考这个博客，
+        //  operator      preserved row table      null supplying table
+        //  join predicate        no                    yes
+        //  where predicate       yes                   no
+        // 非join下推，参考https://zhuanlan.zhihu.com/p/432047724
+        // 只含有filter的project，可以将非nondeterminated的filter下推到project下
+        // agg下推，如果父查询condition是子查询agg条件的子集，则可以将condition下推
+        // window下推，如果condition是window partition条件的子集，则condition可以下推
+        // union下推，可以将非determinted的列下推
         PushDownPredicates,
+        // left semi join可以将outer join转换为inner join
+        // https://issues.apache.org/jira/browse/SPARK-19712
+        // inner join和 semi join的顺序问题
         PushDownLeftSemiAntiJoin,
         PushLeftSemiLeftAntiThroughJoin,
+        // limit 下推
         LimitPushDown,
+        // windows函数的partition如果为空则可以下推limit
         LimitPushDownThroughWindow,
+        // project 下推,列下推
         ColumnPruning,
         GenerateOptimization,
         // Operator combine
         CollapseRepartition,
+        // https://issues.apache.org/jira/browse/SPARK-27123
+        // 类似子查询扁平化，将子查询与主查询的project合并
         CollapseProject,
         OptimizeWindowFunctions,
         CollapseWindow,
