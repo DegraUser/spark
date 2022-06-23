@@ -78,7 +78,7 @@ abstract class Optimizer(catalogManager: CatalogManager)
   def defaultBatches: Seq[Batch] = {
     val operatorOptimizationRuleSet =
       Seq(
-        // Operator push down
+// Operator push down
         // https://blog.csdn.net/zg_hover/article/details/118633266
         // 将select的project列下推到relation上,
         // ds2.union(ds3).union(ds2).select("name").explain(true)
@@ -109,29 +109,54 @@ abstract class Optimizer(catalogManager: CatalogManager)
         // union下推，可以将非determinted的列下推
         PushDownPredicates,
         // left semi join可以将outer join转换为inner join
+        // Project、Window、Union、Aggregate、PushPredicateThroughNonJoin 场景下，
+        // 下推 LeftSemi/LeftAnti
+        PushDownLeftSemiAntiJoin,
         // https://issues.apache.org/jira/browse/SPARK-19712
         // inner join和 semi join的顺序问题
-        PushDownLeftSemiAntiJoin,
         PushLeftSemiLeftAntiThroughJoin,
         // limit 下推
+        // https://blog.csdn.net/zg_hover/article/details/119341554
+        // 1. 可以将limit下给两个project
+        // 2. out join下推到具体的孩子，如left outer join下推到左孩子
+        // 3. full join不能优化
+        // local limit指的是某一个查询的limit， global limit只得是最终的limit
+        // 如果是agg only limit 1，则可以将limit 1下推
         LimitPushDown,
-        // windows函数的partition如果为空则可以下推limit
+        // https://www.waitingforcode.com/apache-spark-sql/what-new-apache-spark-3.2.0-performance-optimizations/read
+        // windows函数的partition如果为空则可以下推limit和order by 条件
         LimitPushDownThroughWindow,
         // project 下推,列下推
         ColumnPruning,
+        // https://issues.apache.org/jira/browse/SPARK-37450
         GenerateOptimization,
-        // Operator combine
+// Operator combine
+        // https://juejin.cn/post/7099062368981745695
+        // https://www.jianshu.com/p/efa0ace796c0 coalesce和repartion的区别
+        // repartition是shuffle partition个数，coalesce是不shuffle尽量生成个数
         CollapseRepartition,
         // https://issues.apache.org/jira/browse/SPARK-27123
         // 类似子查询扁平化，将子查询与主查询的project合并
+        // https://juejin.cn/post/7099062368981745695
         CollapseProject,
+        // 关于NTH_VALUE窗口函数的优化
+        // https://issues.apache.org/jira/browse/SPARK-32934
         OptimizeWindowFunctions,
+        // 如果多个窗口函数的partition条件并且order by条件一致，并且output
+        // 类型一致，则可以合并两个函数一起算
         CollapseWindow,
+        // https://juejin.cn/post/7099062368981745695
+        // 可以将filter通过and连接，构成平级关系而不是上下级关系
         CombineFilters,
+        // https://issues.apache.org/jira/browse/SPARK-33442
+        // 消除limit，如果max_row < limit
         EliminateLimits,
+        // https://issues.apache.org/jira/browse/SPARK-28330
+        // offset类似limit可以指定从offset开始返回行
         RewriteOffsets,
+        // 合并多个union未一个union，最后做一次aggregation
         CombineUnions,
-        // Constant folding and strength reduction
+// Constant folding and strength reduction
         OptimizeRepartition,
         TransposeWindow,
         NullPropagation,
