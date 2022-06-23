@@ -1,0 +1,16 @@
+// 非join下推，参考https://zhuanlan.zhihu.com/p/432047724
+// 只含有filter的project，可以将非nondeterminated的filter下推到project下
+// agg下推，如果父查询condition是子查询agg条件的子集，则可以将condition下推
+// window下推，如果condition是window partition条件的子集，则condition可以下推
+// union下推，可以将非determinted的列下推
+PushPredicateThroughNonJoin
+
+https://www.mail-archive.com/reviews@spark.apache.org/msg1402256.html
+子查询是union，可以将union子查询的两个project分别与两一个表做join，结果再合并
+
+through join,就是通过join孩子节点下推
+through non join就是通过非join孩子节点下推，如agg、project、window等
+
+
+https://www.alibabacloud.com/help/en/maxcompute/latest/optimize-sql-statements
+阿里巴巴关于sql优化描述
