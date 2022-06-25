@@ -157,35 +157,121 @@ abstract class Optimizer(catalogManager: CatalogManager)
         // 合并多个union未一个union，最后做一次aggregation
         CombineUnions,
 // Constant folding and strength reduction
+        // https://issues.apache.org/jira/browse/SPARK-33806
+        // https://issues.apache.org/jira/browse/SPARK-34030
+        // 将常量partition合并未1个
         OptimizeRepartition,
+        // https://issues.apache.org/jira/browse/SPARK-20636
+        // 如果两个相邻的window函数的partition 列是包含关系，
+        // 则window的shuffle动作可以合并为1个
         TransposeWindow,
+        // null值水平传递，可以传递到scan或者agg中
         NullPropagation,
+        // https://issues.apache.org/jira/browse/SPARK-36665
+        // BooleanSimplification should be able to do more simplifications
+        // for Not operators applying following rules
+        // 1. Not(null) == null
+        // e.g. IsNull(Not(...)) can be IsNull(...)
+        // 2. (Not(a) = b) == (a = Not(b))
+        // e.g. Not(...) = true can be (...) = false
+        // 3.(a != b) == (a = Not(b))
+        // e.g. (...) != true can be (...) = false
         NullDownPropagation,
+        // 常量传递，如果是等值条件并且是and连接，则可以将常量
+        // 传递到其它的表达式上
         ConstantPropagation,
+        // 常量折叠，将常量表达式合并
+        // /**
+        // * Replace attributes with aliases of the original foldable expressions if possible.
+        // * Other optimizations will take advantage of the propagated foldable expressions. For example,
+        // * this rule can optimize
+        // * {{{
+        // *   SELECT 1.0 x, 'abc' y, Now() z ORDER BY x, y, 3
+        // * }}}
+        // * to
+        // * {{{
+        // *   SELECT 1.0 x, 'abc' y, Now() z ORDER BY 1.0, 'abc', Now()
+        // * }}}
+        // * and other rules can further optimize it and remove the ORDER BY operator.
+        // */
+        // 常量表达式的别名，可以替换为常量表达式，供其它算子优化
         FoldablePropagation,
+        // https://juejin.cn/post/7099062368981745695
+        // in(list)中有重复的常量，可以合并。
         OptimizeIn,
+        // 提前计算可以合并的常量优化
         ConstantFolding,
+        // aggregate中filter的消除
         EliminateAggregateFilter,
+        // https://juejin.cn/post/7099062368981745695
+        // select 1 + (id + 2) + 3 from t;
+        // 可以优化为select id + 6 from t;
         ReorderAssociativeOperator,
+        // https://juejin.cn/post/7099062368981745695
+        // select * from t where id like '%abc'
+        // can optimizer
+        // select * from t where id endwith('abc')
+        // e.g like 'abc%' equal startwith('abc')
         LikeSimplification,
+        // https://juejin.cn/post/7099062368981745695
+        // 如果谓词包含多个bool表达式，如果一个表达式能够反映出计算结果，就不用结算其它的表达式了
+        // select * from t where(id > 10 and a < 100) or (id > 10);
+        // equal select * from t where id > 10 and id is not null;
         BooleanSimplification,
+        // https://juejin.cn/post/7099062368981745695
+        // 如果常量谓词能够在优化阶段算出，则可以直接返回值
+        // select if(2>1, 'a', 'b');
+        // equal select a as if(2>1, 'a', 'b');
         SimplifyConditionals,
         PushFoldableIntoBranches,
         RemoveDispensableExpressions,
+        // https://juejin.cn/post/7099062368981745695
         SimplifyBinaryComparison,
+        // https://juejin.cn/post/7099062368981745695
+        // filter null can be replace with false
         ReplaceNullWithFalseInPredicate,
+        // https://juejin.cn/post/7099062368981745695
+
         SimplifyConditionalsInPredicate,
+        // https://juejin.cn/post/7099062368981745695
+        // select * from t where 1>0;
+        // equal select * from t;
         PruneFilters,
+        // https://juejin.cn/post/7099062368981745695/
+        // select cast('abc' as string) as c1;
+        // 'abc'和string类型相同，可以相处cast
         SimplifyCasts,
+        // // https://juejin.cn/post/7099062368981745695
+        // 大小写转换替代，如果内层大小写转换被外层替换，则可以消除内部重写
+        // select upper(lower('abcDEF'))
+        // equal select upper('abcDEF')
+        // equal select 'ABCDEF' as upper(lower('abcDEF'))
         SimplifyCaseConversionExpressions,
+        // https://juejin.cn/post/7099062368981745695
+        // 相关子查询转join, 如果是标量子查询必须转换为single row join
+        // select a from ()
         RewriteCorrelatedScalarSubquery,
+        // lateralSubquery转join
         RewriteLateralSubquery,
+        // https://juejin.cn/post/7099062368981745695
+        // 消除无用的序列化和反序列化
+        // spark.range(10).map(_*1).map(_+2)
+        // .map(_*1)序列化不需要可以删除，range(10).map(_+2)就不需要序列化了
         EliminateSerialization,
+        // https://juejin.cn/post/7099062368981745695
+        // 别名删除
+        // select id as id from t; equal select id from t;
         RemoveRedundantAliases,
+        // https://www.waitingforcode.com/apache-spark-sql/what-new-apache-spark-3.2.0-performance-optimizations/read
+        // select number from (select num, count(*) from t group by number) group by num;
+        // equal select num from (select num, count(*) from t group by number);
         RemoveRedundantAggregates,
         UnwrapCastInBinaryComparison,
         RemoveNoopOperators,
         OptimizeUpdateFields,
+        // https://juejin.cn/post/7099062368981745695
+        // select array('a', 'b', 'c')[0] as c1;
+        // equal select a as c1; e.g
         SimplifyExtractValueOps,
         OptimizeCsvJsonExprs,
         CombineConcats,

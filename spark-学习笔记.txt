@@ -14,3 +14,14 @@ through non join就是通过非join孩子节点下推，如agg、project、windo
 
 https://www.alibabacloud.com/help/en/maxcompute/latest/optimize-sql-statements
 阿里巴巴关于sql优化描述
+
+select count(b = 5) from t;
+这个sql什么意思
+
+子查询出现在表达式里面，必须是标量子查询及查询结果只能为一条;
+如下面两条，子查询必须为标量子查询
+select * from t where a >= (select b from t1 where t.b = t1.b);
+select *, (select b from t1 where t.b = t1.b) as test_col from t;
+
+
+
