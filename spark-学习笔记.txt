@@ -23,5 +23,19 @@ select count(b = 5) from t;
 select * from t where a >= (select b from t1 where t.b = t1.b);
 select *, (select b from t1 where t.b = t1.b) as test_col from t;
 
+hive相关优化规则
+https://cwiki.apache.org/confluence/display/Hive/OuterJoinBehavior
 
 
+
+
+
+
+
+
+
+
+
+
+???
+select max(dinstinct a) from t;

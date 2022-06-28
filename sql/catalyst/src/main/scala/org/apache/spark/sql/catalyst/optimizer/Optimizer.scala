@@ -79,11 +79,17 @@ abstract class Optimizer(catalogManager: CatalogManager)
     val operatorOptimizationRuleSet =
       Seq(
 // Operator push down
-        // https://blog.csdn.net/zg_hover/article/details/118633266
         // 将select的project列下推到relation上,
         // ds2.union(ds3).union(ds2).select("name").explain(true)
         // project下推，将name下推到3个relation上
         // union distinct 不能这样优化
+        // https://blog.csdn.net/zg_hover/article/details/118633266
+        // https://juejin.cn/post/7099061906211602446
+        // select U.c1, U.c1 from (select 1 as c1, 2 as c2, 3 as c3 from t1 union all
+        // select 1 as c1, 2 as c2, 3 as c3 from t2) U;
+        // equals 将子查询union中的c3清理掉
+        // select U.c1, U.c1 from (select 1 as c1, 2 as c2 from t1 union all
+        // select 1 as c1, 2 as c2from t2) U;
         PushProjectionThroughUnion,
         // 注释中提到，将调整joinorder使得最开始执行的join至少有一个condition
         // https://issues.apache.org/jira/browse/SPARK-12032
@@ -91,11 +97,15 @@ abstract class Optimizer(catalogManager: CatalogManager)
         // 并且where条件顺序会影响join的顺序。
         // https://issues.apache.org/jira/browse/SPARK-17791
         // 星形join优化，将dim表提前到fact表做join优化
+        // 将带有条件的join，优先推到下层
+        // select * from it inner join t2 inner join t3 where t1.id = t3.id;
+        // equals select *from it inner join t3 inner join t2 where t1.id=t3.id;
         ReorderJoin,
         // 将outer join转换为innerjoin如果有相关条件的话
         // 如果可以推导出join条件列非空，则可以将outerjoin 调整未inner join
         EliminateOuterJoin,
         // 谓词下推支持join、project、filter、aggregate
+        // https://juejin.cn/post/7099061906211602446
         // 此处包含join下推和非join下推
         // join下推https://hover.blog.csdn.net/article/details/118884263
         // 参考这个博客，
@@ -117,7 +127,7 @@ abstract class Optimizer(catalogManager: CatalogManager)
         PushLeftSemiLeftAntiThroughJoin,
         // limit 下推
         // https://blog.csdn.net/zg_hover/article/details/119341554
-        // 1. 可以将limit下给两个project
+        // 1. inion 可以将limit下给两个project
         // 2. out join下推到具体的孩子，如left outer join下推到左孩子
         // 3. full join不能优化
         // local limit指的是某一个查询的limit， global limit只得是最终的limit
@@ -154,7 +164,7 @@ abstract class Optimizer(catalogManager: CatalogManager)
         // https://issues.apache.org/jira/browse/SPARK-28330
         // offset类似limit可以指定从offset开始返回行
         RewriteOffsets,
-        // 合并多个union未一个union，最后做一次aggregation
+        // 合并多个union为一个union，最后做一次aggregation
         CombineUnions,
 // Constant folding and strength reduction
         // https://issues.apache.org/jira/browse/SPARK-33806
@@ -266,15 +276,24 @@ abstract class Optimizer(catalogManager: CatalogManager)
         // select number from (select num, count(*) from t group by number) group by num;
         // equal select num from (select num, count(*) from t group by number);
         RemoveRedundantAggregates,
+        // https://issues.apache.org/jira/browse/SPARK-24994
+        // select * from t where a = 100; a smallint 100 int
+        // we push 100 to parquet
         UnwrapCastInBinaryComparison,
+        // 空操作符可以删除
         RemoveNoopOperators,
         OptimizeUpdateFields,
         // https://juejin.cn/post/7099062368981745695
         // select array('a', 'b', 'c')[0] as c1;
         // equal select a as c1; e.g
         SimplifyExtractValueOps,
+        // 可以优化schema只解码project中的列
         OptimizeCsvJsonExprs,
+        // concat 函数级联合并
+        // select concat("abc", concat("def","ghi") as c1;
+        // equal s select concat("abc", "defghi") as c1;
         CombineConcats,
+        // https://github.com/apache/spark/pull/34929#discussion_r779653096
         PushdownPredicatesAndPruneColumnsForCTEDef) ++
         extendedOperatorOptimizationRules
 
@@ -282,6 +301,7 @@ abstract class Optimizer(catalogManager: CatalogManager)
       Batch("Operator Optimization before Inferring Filters", fixedPoint,
         operatorOptimizationRuleSet: _*) ::
       Batch("Infer Filters", Once,
+      // https://issues.apache.org/jira/browse/SPARK-33544
         InferFiltersFromGenerate,
         InferFiltersFromConstraints) ::
       Batch("Operator Optimization after Inferring Filters", fixedPoint,
@@ -289,16 +309,22 @@ abstract class Optimizer(catalogManager: CatalogManager)
       // Set strategy to Once to avoid pushing filter every time because we do not change the
       // join condition.
       Batch("Push extra predicate through join", fixedPoint,
+        // 将join条件下推到孩子节点
         PushExtraPredicateThroughJoin,
         PushDownPredicates) :: Nil
     }
 
+    // https://juejin.cn/post/7099060822856433695
+    // this batch reference the url
     val batches = (
+      // for cte https://issues.apache.org/jira/browse/SPARK-37670
     Batch("Finish Analysis", Once, FinishAnalysis) ::
     //////////////////////////////////////////////////////////////////////////////////////////
     // Optimizer rules start here
     //////////////////////////////////////////////////////////////////////////////////////////
-    Batch("Eliminate Distinct", Once, EliminateDistinct) ::
+    // select max(distinct a) from t;
+      // equals select max(a) from t; 消除distinct
+      Batch("Eliminate Distinct", Once, EliminateDistinct) ::
     // - Do the first call of CombineUnions before starting the major Optimizer rules,
     //   since it can reduce the number of iteration and the other rules could add/move
     //   extra operators between two adjacent Union operators.
@@ -426,15 +452,33 @@ abstract class Optimizer(catalogManager: CatalogManager)
     // However, because we also use the analyzer to canonicalized queries (for view definition),
     // we do not eliminate subqueries or compute current time in the analyzer.
     private val rules = Seq(
+      // 消除hint，将hint下推到具体的算子上
+      // https://juejin.cn/post/7099060822856433695
       EliminateResolvedHint,
+      // 消除子查询
+      // Subquery可以直接对接project或者LogicalRDD(ScanXO)
       EliminateSubqueryAliases,
+      // 消除view
+      // 再逻辑计划中，subquery孩子为view，view的孩子为一个query，
+      // 可以合并subquery、view、及project
       EliminateView,
+      // 表达式替换，将其它数据库的表达式替换为等价的spark表达式
       ReplaceExpressions,
+      // https://juejin.cn/post/7099060822856433695
+      // 非相关子查询重写
+      // select * from t where exists(select b from t1 where a = 1);
+      // equals select * from t where (select 1 from (select * from t1 where t1.a = 10) limit 1) is not null
       RewriteNonCorrelatedExists,
+      // https://github.com/apache/spark/pull/32396
+      // 在agg下方挂在project算子，将复杂的运算下推到project算子，以保证agg算子的分组函数没有复杂的函数
       PullOutGroupingExpressions,
+      // 如果一个语句中包含多个计算时间的表达式，则同时计算时间，以保证sql时间的一致性
       ComputeCurrentTime,
+      // replace database and catalog name
       ReplaceCurrentLike(catalogManager),
+      // 静态时间戳计算
       SpecialDatetimeValues,
+      // as of jon spark semantic
       RewriteAsOfJoin)
 
     override def apply(plan: LogicalPlan): LogicalPlan = {
