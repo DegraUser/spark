@@ -28,10 +28,13 @@ https://cwiki.apache.org/confluence/display/Hive/OuterJoinBehavior
 
 
 
+sqlBase.g4
+文件中的statement后面跟一个#dropTable  是为了生成VisitDropTable这个类
 
 
 
-
+spark打包
+./build/sbt package -Phive -Phive-thriftserver
 
 
 

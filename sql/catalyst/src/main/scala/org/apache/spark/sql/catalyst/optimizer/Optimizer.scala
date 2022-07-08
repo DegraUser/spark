@@ -344,28 +344,55 @@ abstract class Optimizer(catalogManager: CatalogManager)
     // (e.g. InferFiltersFromConstraints). If we run this batch earlier, the query becomes just
     // LocalRelation and does not trigger many rules.
     Batch("LocalRelation early", fixedPoint,
+      // 将LocalRelation上的本地操作，转换为一个localRelation
+      // https://www.waitingforcode.com/apache-spark-sql/writing-custom-optimization-apache-spark-sql-union-rewriter-mvp-version/read#custom_node
       ConvertToLocalRelation,
+      // https://jaceklaskowski.gitbooks.io/mastering-spark-sql/content/spark-sql-Optimizer-PropagateEmptyRelation.html
+      // 空表的一个优化
       PropagateEmptyRelation,
       // PropagateEmptyRelation can change the nullability of an attribute from nullable to
       // non-nullable when an empty relation child of a Union is removed
       UpdateAttributeNullability) ::
     Batch("Pullup Correlated Expressions", Once,
+      // https://issues.apache.org/jira/browse/SPARK-36063
+      // one row 优化为子查询消除
       OptimizeOneRowRelationSubquery,
+      // https://docs.google.com/document/d/1QDZ8JwU63RwGFS6KVF54Rjj9ZJyK33d49ZWbjFBaIgU/edit#
+      // 设计文档,有些条件是不能上提的，可能会影响结果正确性
+      // select * from t where exists(select 1 from t1 where t.b = t1.b limit 1);
+      // 此sql是 符合条件之后limit 1， 如果对子查询先进行limit 1，再进行等值判断，则会出错
       PullupCorrelatedPredicates) ::
     // Subquery batch applies the optimizer rules recursively. Therefore, it makes no sense
     // to enforce idempotence on it and we change this batch from Once to FixedPoint(1).
     Batch("Subquery", FixedPoint(1),
+      // https://juejin.cn/post/7099060822856433695
+      // 消除子查询的order by条件
+      // select id, (select max(a) from t1 where t.id = t1.id order by max(a) ) from t;
+      // 标量子查询只会返回一条结果，所以order by无用，可以省略掉
       OptimizeSubqueries) ::
+      // https://juejin.cn/post/7099061906211602446
+      // 重写可参考
     Batch("Replace Operators", fixedPoint,
+      // https://juejin.cn/post/7099061906211602446
+      // 使用union all、agg等将except all重写
       RewriteExceptAll,
+      // https://juejin.cn/post/7099061906211602446
+      // 使用union all、agg等将intersect all语句
       RewriteIntersectAll,
+      // https://juejin.cn/post/7099061906211602446
+      // 使用semijoin重写intersect语句
       ReplaceIntersectWithSemiJoin,
+      // except重写
       ReplaceExceptWithFilter,
       ReplaceExceptWithAntiJoin,
       ReplaceDistinctWithAggregate,
       ReplaceDeduplicateWithAggregate) ::
     Batch("Aggregate", fixedPoint,
+      // select b from t group by b, "a", "b";
+      // equals select b from t group by b; can remove agg exp "a","b"
       RemoveLiteralFromGroupExpressions,
+      // select b from t group by b, b;
+      // equals select b from t group by b;
       RemoveRepetitionFromGroupExpressions) :: Nil ++
     operatorOptimizationBatch) :+
     Batch("Clean Up Temporary CTE Info", Once, CleanUpTempCTEInfo) :+
@@ -380,14 +407,20 @@ abstract class Optimizer(catalogManager: CatalogManager)
     // Since join costs in AQP can change between multiple runs, there is no reason that we have an
     // idempotence enforcement on this batch. We thus make it FixedPoint(1) instead of Once.
     Batch("Join Reorder", FixedPoint(1),
+      // join reorder
       CostBasedJoinReorder) :+
     Batch("Eliminate Sorts", Once,
+      // select * from (select * from t order by a) t order by a;
+      // equals select * from (select * from t order by a) t;
       EliminateSorts) :+
     Batch("Decimal Optimizations", fixedPoint,
       DecimalAggregates) :+
     // This batch must run after "Decimal Optimizations", as that one may change the
     // aggregate distinct column
     Batch("Distinct Aggregate Rewrite", Once,
+      // 重写聚合函数种带有distinct的语句
+      // select count(distinct a) from t group by b; =>
+      // select count(a) from (select a, b from t group by b, a) group by b;
       RewriteDistinctAggregates) :+
     Batch("Object Expressions Optimization", fixedPoint,
       EliminateMapObjects,
@@ -396,17 +429,21 @@ abstract class Optimizer(catalogManager: CatalogManager)
       ReassignLambdaVariableID) :+
     Batch("LocalRelation", fixedPoint,
       ConvertToLocalRelation,
+      // https://jaceklaskowski.gitbooks.io/mastering-spark-sql/content/spark-sql-Optimizer-PropagateEmptyRelation.html
       PropagateEmptyRelation,
       // PropagateEmptyRelation can change the nullability of an attribute from nullable to
       // non-nullable when an empty relation child of a Union is removed
       UpdateAttributeNullability) :+
+    // one row or less table can runing sort、agg、distinct、e.g
     Batch("Optimize One Row Plan", fixedPoint, OptimizeOneRowPlan) :+
     // The following batch should be executed after batch "Join Reorder" and "LocalRelation".
     Batch("Check Cartesian Products", Once,
       CheckCartesianProducts) :+
     Batch("RewriteSubquery", Once,
+      // not exists in/not in to semi/anti join
       RewritePredicateSubquery,
       ColumnPruning,
+      // prjoect -> project   project
       CollapseProject,
       RemoveRedundantAliases,
       RemoveNoopOperators) :+

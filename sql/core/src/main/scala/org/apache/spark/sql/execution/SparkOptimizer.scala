@@ -35,14 +35,17 @@ class SparkOptimizer(
     experimentalMethods: ExperimentalMethods)
   extends Optimizer(catalogManager) {
 
-  override def earlyScanPushDownRules: Seq[Rule[LogicalPlan]] =
+  override def earlyScanPushDownRules: Seq[Rule[LogicalPlan]] = {
     // TODO: move SchemaPruning into catalyst
+    // parquet嵌套格式的优化
+    // https://issues.apache.org/jira/browse/SPARK-4502
     Seq(SchemaPruning) :+
       GroupBasedRowLevelOperationScanPlanning :+
       V2ScanRelationPushDown :+
       V2ScanPartitioning :+
       V2Writes :+
       PruneFileSourcePartitions
+  }
 
   override def preCBORules: Seq[Rule[LogicalPlan]] =
     OptimizeMetadataOnlyDeleteFromTable :: Nil
