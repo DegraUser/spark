@@ -42,3 +42,8 @@ spark打包
 
 ???
 select max(dinstinct a) from t;
+
+spark-sql show planner log
+set spark.sql.planChangeLog.level=WARN;
+
+
